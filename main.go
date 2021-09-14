@@ -24,16 +24,14 @@ func main() {
 
 	rootFolder := sync.SyncedFolder{LocalPath: srcPath, CloudId: cloudFolder.Id, Drive: drv}
 
-	workerAmount := 100
-	foldersToSync := make(chan sync.SyncedFolder, workerAmount)
-
-	for j := 0; j < workerAmount; j++ {
+	foldersToSync := make(chan *sync.SyncedFolder, 10000000)
+	for j := 0; j < 20; j++ {
 		go sync.StartSync(foldersToSync)
 	}
 
 	for {
 		log.Printf("Starting Sync Job at Root Folder %s", rootFolder.LocalPath)
-		foldersToSync <- rootFolder
+		foldersToSync <- &rootFolder
 		time.Sleep(time.Hour * 12)
 	}
 }

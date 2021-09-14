@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 
 	"google.golang.org/api/drive/v3"
 )
@@ -43,52 +44,68 @@ func EnsureDestFolder(drv *drive.Service, folderName string) *drive.File {
 	return r.Files[0]
 }
 
-func LocateFile(fileName string, parentFolder SyncedFolder, fileType string) *drive.File {
+func LocateFile(fileName string, parentFolder *SyncedFolder, fileType string) (*drive.File, error) {
 	comparison := "="
 	if fileType == "file" {
 		comparison = "!="
 	}
+
 	r, err := parentFolder.Drive.Files.List().PageSize(int64(1000)).OrderBy("folder").
-		Q("'" + parentFolder.CloudId + "' in parents AND mimeType " + comparison + " 'application/vnd.google-apps.folder' AND name = '" + fileName + "' AND trashed = false").
+		Q("'" + parentFolder.CloudId + "' in parents AND mimeType " + comparison + " 'application/vnd.google-apps.folder' AND name = '" + strings.ReplaceAll(fileName, "'", "\\'") + "' AND trashed = false").
 		Fields("nextPageToken, files(*)").
 		Do()
 
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	if len(r.Files) == 0 {
+		return nil, nil
+	}
+
+	return r.Files[0], nil
+}
+
+func CreateSyncedFolder(parentSyncedFolder *SyncedFolder, folderName string) *SyncedFolder {
+	syncedFolderFullPath := parentSyncedFolder.LocalPath + folderName + "/"
+
+	folder, err := LocateFile(folderName, parentSyncedFolder, "folder")
+	if err != nil {
+		log.Printf("Search on Drive failed for folder %s. Reason: '%s'", syncedFolderFullPath, err)
 		return nil
 	}
 
-	return r.Files[0]
-}
-
-func CreateSyncedFolder(parentSyncedFolder SyncedFolder, folderName string) SyncedFolder {
-	folder := LocateFile(folderName, parentSyncedFolder, "folder")
-	syncedFolderFullPath := parentSyncedFolder.LocalPath + folderName + "/"
-
 	if folder == nil {
-		log.Printf("Creating folder %s on Cloud", syncedFolderFullPath)
+		log.Printf("Creating folder %s on Drive", syncedFolderFullPath)
 		folder = &drive.File{Name: folderName, MimeType: "application/vnd.google-apps.folder", Parents: []string{parentSyncedFolder.CloudId}}
-		folder, _ = parentSyncedFolder.Drive.Files.Create(folder).Fields("*").Do()
+		createdFolder, err := parentSyncedFolder.Drive.Files.Create(folder).Fields("*").Do()
+		if err != nil {
+			log.Printf("Failed to create folder %s on Drive. Reason: '%s'", syncedFolderFullPath, err)
+			return nil
+		}
+		folder = createdFolder
 	}
 
-	return SyncedFolder{Drive: parentSyncedFolder.Drive, LocalPath: syncedFolderFullPath, CloudId: folder.Id}
+	return &SyncedFolder{Drive: parentSyncedFolder.Drive, LocalPath: syncedFolderFullPath, CloudId: folder.Id}
 }
 
-func CopyFile(parentSyncedFolder SyncedFolder, file os.FileInfo) {
+func CopyFile(parentSyncedFolder *SyncedFolder, file os.FileInfo) {
 	fullFilePath := parentSyncedFolder.LocalPath + file.Name()
-	cloudFile := LocateFile(file.Name(), parentSyncedFolder, "file")
+
+	cloudFile, err := LocateFile(file.Name(), parentSyncedFolder, "file")
+	if err != nil {
+		log.Printf("Search on Drive failed for file %s. Reason: '%s'", fullFilePath, err)
+		return
+	}
 
 	if cloudFile != nil && cloudFile.Size != file.Size() {
-		log.Printf("Deleting file %s from Cloud", fullFilePath)
+		log.Printf("Deleting file %s from Drive", fullFilePath)
 		parentSyncedFolder.Drive.Files.Delete(cloudFile.Id).Do()
 		cloudFile = nil
 	}
 
 	if cloudFile == nil {
-		log.Printf("Copying file %s to Cloud", fullFilePath)
+		log.Printf("Copying file %s to Drive", fullFilePath)
 		contentReader, err := os.Open(fullFilePath)
 		if err != nil {
 			log.Printf("Error copying file %s: %s", fullFilePath, err)
@@ -97,7 +114,10 @@ func CopyFile(parentSyncedFolder SyncedFolder, file os.FileInfo) {
 
 		cloudFile = &drive.File{Name: file.Name(), Parents: []string{parentSyncedFolder.CloudId}}
 		parentSyncedFolder.Drive.Files.Create(cloudFile).Media(bufio.NewReader(contentReader)).Do()
+		return
 	}
+
+	// log.Printf("Skipping file %s", fullFilePath)
 }
 
 func cloudFileIsInFileInfoList(cloudFile *drive.File, files []os.FileInfo) bool {
@@ -110,22 +130,31 @@ func cloudFileIsInFileInfoList(cloudFile *drive.File, files []os.FileInfo) bool 
 	return false
 }
 
-func CompareFolders(folder SyncedFolder, files []os.FileInfo) {
-	folder.Drive.Files.List().Q("'"+folder.CloudId+"' in parents AND trashed = false").Fields("file(id, name)").PageSize(int64(1000)).
-		Pages(context.Background(), func(f *drive.FileList) error {
-			for _, cloudFile := range f.Files {
-				cloudFileExistsLocally := cloudFileIsInFileInfoList(cloudFile, files)
-				if !cloudFileExistsLocally {
-					log.Printf("File (or Folder) %s was deleted locally. Deleting from Cloud.", folder.LocalPath+cloudFile.Name)
-					folder.Drive.Files.Delete(cloudFile.Id).Do()
-				}
+func CompareFolders(folder *SyncedFolder, files []os.FileInfo) {
+	// log.Printf("Comparing folder %s to its Cloud counterpart", folder.LocalPath)
+
+	folder.Drive.Files.List().
+		Q("'"+folder.CloudId+"' in parents AND trashed = false").Fields("files(id, name)").
+		PageSize(int64(1000)).Pages(context.Background(), func(resultSet *drive.FileList) error {
+		for _, cloudFile := range resultSet.Files {
+			cloudFileExistsLocally := cloudFileIsInFileInfoList(cloudFile, files)
+			if !cloudFileExistsLocally {
+				log.Printf("File (or Folder) %s was deleted locally. Deleting from Cloud.", folder.LocalPath+cloudFile.Name)
+				folder.Drive.Files.Delete(cloudFile.Id).Do()
+				continue
 			}
-			return nil
-		})
+		}
+		return nil
+	})
 }
 
-func ScanSyncedFolder(folder SyncedFolder, foldersToSync chan<- SyncedFolder) {
-	files, _ := ioutil.ReadDir(folder.LocalPath)
+func ScanSyncedFolder(folder *SyncedFolder, foldersToSync chan<- *SyncedFolder) {
+	files, err := ioutil.ReadDir(folder.LocalPath)
+
+	if err != nil {
+		log.Printf("Error reading folder %s. Skipping.", folder.LocalPath)
+		return
+	}
 
 	for _, f := range files {
 
@@ -144,8 +173,10 @@ func ScanSyncedFolder(folder SyncedFolder, foldersToSync chan<- SyncedFolder) {
 	CompareFolders(folder, files)
 }
 
-func StartSync(foldersToSync chan SyncedFolder) {
+func StartSync(foldersToSync chan *SyncedFolder) {
 	for folder := range foldersToSync {
-		ScanSyncedFolder(folder, foldersToSync)
+		if folder != nil {
+			ScanSyncedFolder(folder, foldersToSync)
+		}
 	}
 }

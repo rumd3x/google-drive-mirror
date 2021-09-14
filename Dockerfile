@@ -3,6 +3,6 @@ FROM golang
 ADD . /app
 WORKDIR /app
 
-RUN go build --buildmode=exe -o drive-mirror .
+RUN go build --buildmode=exe -o google-drive-mirror .
 
-CMD ./drive-mirror
+CMD ./google-drive-mirror
