@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"runtime"
 	"time"
 
 	"google-drive-mirror/driveutils"
@@ -25,7 +26,7 @@ func main() {
 	rootFolder := sync.SyncedFolder{LocalPath: srcPath, CloudId: cloudFolder.Id, Drive: drv}
 
 	foldersToSync := make(chan *sync.SyncedFolder, 10000000)
-	for j := 0; j < 20; j++ {
+	for j := 0; j < runtime.NumCPU(); j++ {
 		go sync.StartSync(foldersToSync)
 	}
 
