@@ -4,6 +4,9 @@
 *.dll
 *.so
 *.dylib
+token.json
+credentials.json
+vendor
 
 # Test binary, built with `go test -c`
 *.test
