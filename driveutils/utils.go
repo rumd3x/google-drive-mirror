@@ -3,7 +3,6 @@ package driveutils
 import (
 	"context"
 	"log"
-	"net/http"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -11,8 +10,8 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Retrieve a token, saves the token, then returns the generated client.
-func getClient(config *oauth2.Config) *http.Client {
+// Retrieve a token, saves the token, and returns it.
+func getToken(config *oauth2.Config) *oauth2.Token {
 	// The file token.json stores the user's access and refresh tokens, and is
 	// created automatically when the authorization flow completes for the first
 	// time.
@@ -20,19 +19,21 @@ func getClient(config *oauth2.Config) *http.Client {
 	tok, err := tokenFromFile(tokFile)
 	if err != nil {
 		tok = getTokenFromWeb(config)
-		saveToken(tokFile, tok)
+		SaveToken(tokFile, tok)
+		log.Println("OAuth token renewed.")
 	}
-	return config.Client(context.Background(), tok)
+	return tok
 }
 
 // Creates a new Google Drive service
-func GetDrive() *drive.Service {
-	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(getClient(getOAuthConfig())))
+func GetDrive() (*drive.Service, *oauth2.Token) {
+	token := getToken(GetOAuthConfig())
+	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(GetOAuthConfig().Client(context.Background(), token)))
 	if err != nil {
 		log.Fatalf("Unable to retrieve Drive client: %v", err)
 	}
 
-	return srv
+	return srv, token
 }
 
 // IsFolder Returns true if provided file is a folder, false otherwise

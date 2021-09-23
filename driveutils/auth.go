@@ -13,7 +13,8 @@ import (
 	"google.golang.org/api/drive/v3"
 )
 
-func getOAuthConfig() *oauth2.Config {
+// GetOAuthConfig retrievers oauth config from credentials.json file
+func GetOAuthConfig() *oauth2.Config {
 	b, err := ioutil.ReadFile("credentials.json")
 	if err != nil {
 		log.Fatalf("Unable to read client secret file: %v", err)
@@ -59,7 +60,7 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 }
 
 // Saves a token to a file path.
-func saveToken(path string, token *oauth2.Token) {
+func SaveToken(path string, token *oauth2.Token) {
 	fmt.Printf("Saving credential file to: %s\n", path)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
